@@ -40,8 +40,8 @@ port_status() {
     check_firewall
     echo -e "端口\t协议\t状态\t类型\t占用IP"
     
-    # 使用 `ss` 命令来检查端口占用情况
-    ss -tuln | grep -E '^tcp|^udp' | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}' | sort
+    # 使用 `ss` 命令来检查端口占用情况，并用 column 格式化输出
+    ss -tuln | grep -E '^tcp|^udp' | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}' | sort | column -t
 }
 
 # 查看指定端口占用情况
@@ -51,7 +51,7 @@ check_specific_ports() {
     ports=($input_ports)
     
     for port in "${ports[@]}"; do
-        ss -tuln | grep ":$port" | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}'
+        ss -tuln | grep ":$port" | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}' | column -t
     done
 }
 
