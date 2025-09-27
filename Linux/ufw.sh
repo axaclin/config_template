@@ -77,7 +77,7 @@ check_open_ports() {
     echo "==> IPv4 端口："
     for port in $ipv4_ports; do
         # 获取占用端口的 IP 地址
-        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
         protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
         if [ -n "$ip_address" ]; then
             printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv4" "占用" "$ip_address"
@@ -90,7 +90,7 @@ check_open_ports() {
     echo "==> IPv6 端口："
     for port in $ipv6_ports; do
         # 获取占用端口的 IP 地址
-        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
         protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
         if [ -n "$ip_address" ]; then
             printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv6" "占用" "$ip_address"
@@ -117,7 +117,7 @@ check_specific_ports() {
 
         echo "查询端口范围 $start_port 到 $end_port 的占用情况："
         for port in $(seq $start_port $end_port); do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
             protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
             if [ -n "$ip_address" ]; then
                 printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
@@ -128,7 +128,7 @@ check_specific_ports() {
     else
         # 处理单个或多个端口
         for port in $ports_input; do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
             protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
             if [ -n "$ip_address" ]; then
                 printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
