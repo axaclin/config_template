@@ -1,162 +1,413 @@
 #!/bin/bash
 
-# 设置颜色
-RESET="\033[0m"
-RED="\033[31m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-BLUE="\033[34m"
-CYAN="\033[36m"
-WHITE="\033[37m"
-BOLD="\033[1m"
+# 防火墙管理脚本
+# 需要root权限运行
 
-# 检查是否具有 root 权限
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}请使用 root 权限运行此脚本。${RESET}"
-    exit 1
-fi
-
-# 检查防火墙是否已安装
-check_firewall() {
-    if command -v ufw &>/dev/null; then
-        echo -e "${GREEN}当前系统使用的是 UFW 防火墙${RESET}"
-    elif command -v firewall-cmd &>/dev/null; then
-        echo -e "${GREEN}当前系统使用的是 firewalld 防火墙${RESET}"
-    elif command -v iptables &>/dev/null; then
-        echo -e "${GREEN}当前系统使用的是 iptables 防火墙${RESET}"
-    else
-        echo -e "${RED}当前系统未安装已知防火墙程序。${RESET}"
+# 检查root权限
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "错误: 此脚本需要root权限运行" 
+        echo "请使用: sudo $0"
         exit 1
     fi
 }
 
-# 显示当前防火墙类型
-firewall_type() {
-    check_firewall
-    echo -e "${CYAN}已安装的防火墙类型：${RESET}"
-    if command -v ufw &>/dev/null; then
-        echo -e "${BLUE}UFW${RESET}"
+# 检查系统防火墙类型
+check_firewall_type() {
+    echo "=== 系统防火墙类型检测 ==="
+    echo
+    
+    local installed_firewalls=()
+    local active_firewall="无"
+    
+    # 检查UFW
+    if command -v ufw &> /dev/null; then
+        installed_firewalls+=("UFW")
+        if ufw status | grep -q "Status: active"; then
+            active_firewall="UFW"
+        fi
     fi
-    if command -v firewall-cmd &>/dev/null; then
-        echo -e "${BLUE}firewalld${RESET}"
+    
+    # 检查firewalld
+    if command -v firewall-cmd &> /dev/null; then
+        installed_firewalls+=("Firewalld")
+        if systemctl is-active firewalld &> /dev/null; then
+            active_firewall="Firewalld"
+        fi
     fi
-    if command -v iptables &>/dev/null; then
-        echo -e "${BLUE}iptables${RESET}"
+    
+    # 检查iptables
+    if command -v iptables &> /dev/null; then
+        installed_firewalls+=("iptables")
+        # 检查是否有规则
+        if iptables -L -n | grep -q -v "Chain INPUT (policy ACCEPT)" || iptables -L -n | grep -q "REJECT|DROP"; then
+            if [[ $active_firewall == "无" ]]; then
+                active_firewall="iptables"
+            fi
+        fi
+    fi
+    
+    # 显示结果
+    echo "已安装的防火墙类型:"
+    if [[ ${#installed_firewalls[@]} -eq 0 ]]; then
+        echo "  未检测到任何防火墙"
+    else
+        for firewall in "${installed_firewalls[@]}"; do
+            echo "  - $firewall"
+        done
+    fi
+    
+    echo
+    echo "当前活动的防火墙: $active_firewall"
+    echo
+}
+
+# 安装依赖
+install_dependency() {
+    local dep=$1
+    echo "检测到缺少依赖: $dep"
+    read -p "是否安装此依赖? (y/n): " choice
+    
+    case $choice in
+        y|Y)
+            if command -v apt-get &> /dev/null; then
+                apt-get update
+                apt-get install -y $dep
+            elif command -v yum &> /dev/null; then
+                yum install -y $dep
+            elif command -v dnf &> /dev/null; then
+                dnf install -y $dep
+            else
+                echo "无法确定包管理器，请手动安装 $dep"
+                return 1
+            fi
+            ;;
+        *)
+            echo "跳过依赖安装，某些功能可能无法使用"
+            return 1
+            ;;
+    esac
+}
+
+# 检查netstat或ss命令
+check_net_tools() {
+    if ! command -v netstat &> /dev/null && ! command -v ss &> /dev/null; then
+        install_dependency "net-tools"
     fi
 }
 
-# 查看端口占用情况
-port_status() {
-    check_firewall
-    echo -e "${CYAN}端口\t协议\t状态\t类型\t占用IP${RESET}"
+# 获取端口监听信息
+get_port_listening_info() {
+    if command -v ss &> /dev/null; then
+        ss -tuln
+    elif command -v netstat &> /dev/null; then
+        netstat -tuln
+    else
+        echo "错误: 无法获取端口信息，请安装net-tools"
+        return 1
+    fi
+}
+
+# 检查端口是否被占用
+is_port_used() {
+    local port=$1
+    if get_port_listening_info | grep -q ":$port "; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 获取占用端口的进程信息
+get_port_process() {
+    local port=$1
+    if command -v lsof &> /dev/null; then
+        lsof -i :$port 2>/dev/null | awk 'NR==2 {print $1}'
+    else
+        echo "未知(请安装lsof)"
+    fi
+}
+
+# 显示所有端口开放状态
+show_all_ports_status() {
+    echo "=== 系统端口开放状态 ==="
+    echo
     
-    # 使用 `ss` 命令来检查端口占用情况，并用 column 格式化输出
-    ss -tuln | grep -E '^tcp|^udp' | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}' | sort | column -t
+    # 检查防火墙状态
+    local firewall_active=false
+    
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        firewall_active=true
+        echo "防火墙状态: UFW 已启用"
+        ports_info=$(ufw status numbered | grep -E "ALLOW|DENY")
+    elif command -v firewall-cmd &> /dev/null && systemctl is-active firewalld &> /dev/null; then
+        firewall_active=true
+        echo "防火墙状态: Firewalld 已启用"
+        ports_info=$(firewall-cmd --list-all | grep "ports:")
+    else
+        echo "防火墙状态: 未开启防火墙，端口全开放"
+        echo
+        echo "当前监听端口:"
+        get_port_listening_info | awk '
+        NR>2 {
+            if ($1 == "tcp" || $1 == "tcp6") protocol="TCP";
+            else if ($1 == "udp" || $1 == "udp6") protocol="UDP";
+            else protocol=$1;
+            
+            split($4, addr, ":");
+            port=addr[length(addr)];
+            type=($1 ~ /6/) ? "IPV6" : "IPV4";
+            ip=addr[1];
+            
+            printf "%-8s %-12s %-10s %-8s %-15s\n", port, protocol, "占用", type, ip;
+        }' | sort -k4,4 -k3,3
+        return
+    fi
+    
+    if [[ -z "$ports_info" ]]; then
+        echo "没有找到开放的端口规则"
+        return
+    fi
+    
+    # 表头
+    printf "%-8s %-12s %-10s %-8s %-15s\n" "端口" "协议" "状态" "类型" "IP地址"
+    printf "%-8s %-12s %-10s %-8s %-15s\n" "------" "------------" "----------" "------" "---------------"
+    
+    # 处理端口信息
+    echo "$ports_info" | while read line; do
+        # 简化处理，实际需要根据防火墙类型解析
+        port=$(echo "$line" | grep -oE '[0-9]+(/[tcp|udp]+)?' | head -1)
+        protocol=$(echo "$line" | grep -oE '(tcp|udp|tcp/udp)' | head -1)
+        
+        if [[ -z "$protocol" ]]; then
+            protocol="TCP/UDP"
+        fi
+        
+        # 检查端口占用
+        port_num=$(echo "$port" | cut -d'/' -f1)
+        if is_port_used "$port_num"; then
+            status="占用"
+            process=$(get_port_process "$port_num")
+        else
+            status="未占用"
+            process=""
+        fi
+        
+        # 这里简化显示，实际需要更复杂的解析
+        printf "%-8s %-12s %-10s %-8s %-15s\n" "$port" "$protocol" "$status" "IPV4" "$process"
+    done | sort -k4,4r -k3,3
 }
 
 # 查看指定端口占用情况
 check_specific_ports() {
-    echo -e "${CYAN}请输入要查询的端口 (单个端口，多个端口用空格分开，或使用范围如 80-90):${RESET}"
-    read -r input_ports
-    ports=($input_ports)
+    echo "=== 指定端口占用情况检查 ==="
+    echo "输入示例:"
+    echo "  - 单个端口: 80"
+    echo "  - 多个端口: 80,443,22"
+    echo "  - 端口范围: 8000-8080"
+    echo
     
-    for port in "${ports[@]}"; do
-        ss -tuln | grep ":$port" | awk '{print $5 "\t" $1 "\t" $2 "\t" $3}' | column -t
-    done
+    read -p "请输入端口(支持单个、多个或范围): " port_input
+    
+    if [[ -z "$port_input" ]]; then
+        echo "输入不能为空"
+        return
+    fi
+    
+    # 表头
+    printf "%-8s %-12s %-10s %-15s\n" "端口" "协议" "状态" "进程"
+    printf "%-8s %-12s %-10s %-15s\n" "------" "------------" "----------" "---------------"
+    
+    # 处理不同类型的输入
+    if [[ "$port_input" =~ ^[0-9]+$ ]]; then
+        # 单个端口
+        check_single_port "$port_input"
+    elif [[ "$port_input" =~ ^[0-9]+-[0-9]+$ ]]; then
+        # 端口范围
+        start_port=$(echo "$port_input" | cut -d'-' -f1)
+        end_port=$(echo "$port_input" | cut -d'-' -f2)
+        
+        for port in $(seq $start_port $end_port); do
+            check_single_port "$port"
+        done
+    elif [[ "$port_input" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+        # 多个端口
+        IFS=',' read -ra ports <<< "$port_input"
+        for port in "${ports[@]}"; do
+            check_single_port "$port"
+        done
+    else
+        echo "输入格式错误"
+        return
+    fi
+}
+
+# 检查单个端口
+check_single_port() {
+    local port=$1
+    if is_port_used "$port"; then
+        local process=$(get_port_process "$port")
+        local protocol="TCP"  # 简化处理
+        printf "%-8s %-12s %-10s %-15s\n" "$port" "$protocol" "占用" "$process"
+    else
+        printf "%-8s %-12s %-10s %-15s\n" "$port" "TCP/UDP" "未占用" "-"
+    fi
 }
 
 # 开放指定端口
 open_ports() {
-    check_firewall
-    echo -e "${CYAN}请输入要开放的端口 (单个端口，多个端口用空格分开，或使用范围如 80-90):${RESET}"
-    read -r input_ports
-    ports=($input_ports)
+    echo "=== 开放指定端口 ==="
+    echo "输入示例:"
+    echo "  - 单个端口: 80"
+    echo "  - 带协议端口: 80/tcp"
+    echo "  - 多个端口: 80,443,22"
+    echo "  - 端口范围: 8000-8080/tcp"
+    echo
     
-    for port in "${ports[@]}"; do
-        if command -v ufw &>/dev/null; then
-            ufw allow $port
-        elif command -v firewall-cmd &>/dev/null; then
-            firewall-cmd --zone=public --add-port=$port/tcp --permanent
-            firewall-cmd --reload
-        elif command -v iptables &>/dev/null; then
-            iptables -A INPUT -p tcp --dport $port -j ACCEPT
-            iptables-save > /etc/iptables/rules.v4
+    read -p "请输入要开放的端口: " port_input
+    
+    if [[ -z "$port_input" ]]; then
+        echo "输入不能为空"
+        return
+    fi
+    
+    # 确定防火墙类型并执行相应命令
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        # UFW
+        if ufw allow "$port_input"; then
+            echo "端口 $port_input 开放成功"
+            ufw reload
+        else
+            echo "端口开放失败"
         fi
-        echo -e "${GREEN}端口 $port 已开放${RESET}"
-    done
+    elif command -v firewall-cmd &> /dev/null && systemctl is-active firewalld &> /dev/null; then
+        # Firewalld
+        if [[ "$port_input" =~ ^[0-9]+$ ]]; then
+            # 单个端口，默认TCP
+            if firewall-cmd --permanent --add-port="$port_input/tcp"; then
+                firewall-cmd --reload
+                echo "端口 $port_input/tcp 开放成功"
+            else
+                echo "端口开放失败"
+            fi
+        else
+            # 其他格式
+            if firewall-cmd --permanent --add-port="$port_input"; then
+                firewall-cmd --reload
+                echo "端口 $port_input 开放成功"
+            else
+                echo "端口开放失败"
+            fi
+        fi
+    else
+        echo "未检测到活动的防火墙"
+        echo "请先启用UFW或Firewalld防火墙"
+    fi
 }
 
 # 关闭指定端口
 close_ports() {
-    check_firewall
-    echo -e "${CYAN}请输入要关闭的端口 (单个端口，多个端口用空格分开，或使用范围如 80-90):${RESET}"
-    read -r input_ports
-    ports=($input_ports)
+    echo "=== 关闭指定端口 ==="
+    echo "输入示例:"
+    echo "  - 单个端口: 80"
+    echo "  - 带协议端口: 80/tcp"
+    echo "  - 多个端口: 80,443,22"
+    echo "  - 端口范围: 8000-8080"
+    echo
     
-    for port in "${ports[@]}"; do
-        if command -v ufw &>/dev/null; then
-            ufw deny $port
-        elif command -v firewall-cmd &>/dev/null; then
-            firewall-cmd --zone=public --remove-port=$port/tcp --permanent
-            firewall-cmd --reload
-        elif command -v iptables &>/dev/null; then
-            iptables -D INPUT -p tcp --dport $port -j ACCEPT
-            iptables-save > /etc/iptables/rules.v4
+    read -p "请输入要关闭的端口: " port_input
+    
+    if [[ -z "$port_input" ]]; then
+        echo "输入不能为空"
+        return
+    fi
+    
+    # 确定防火墙类型并执行相应命令
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        # UFW
+        if ufw delete allow "$port_input"; then
+            echo "端口 $port_input 关闭成功"
+            ufw reload
+        else
+            echo "端口关闭失败"
         fi
-        echo -e "${RED}端口 $port 已关闭${RESET}"
+    elif command -v firewall-cmd &> /dev/null && systemctl is-active firewalld &> /dev/null; then
+        # Firewalld
+        if [[ "$port_input" =~ ^[0-9]+$ ]]; then
+            # 单个端口，默认TCP
+            if firewall-cmd --permanent --remove-port="$port_input/tcp"; then
+                firewall-cmd --reload
+                echo "端口 $port_input/tcp 关闭成功"
+            else
+                echo "端口关闭失败"
+            fi
+        else
+            # 其他格式
+            if firewall-cmd --permanent --remove-port="$port_input"; then
+                firewall-cmd --reload
+                echo "端口 $port_input 关闭成功"
+            else
+                echo "端口关闭失败"
+            fi
+        fi
+    else
+        echo "未检测到活动的防火墙"
+    fi
+}
+
+# 显示菜单
+show_menu() {
+    clear
+    echo "====================================="
+    echo "          Linux防火墙管理脚本       "
+    echo "====================================="
+    echo "1. 系统防火墙的类型"
+    echo "2. 开放端口占用情况"
+    echo "3. 指定端口占用情况"
+    echo "4. 开放指定端口"
+    echo "5. 关闭指定端口"
+    echo "6. 退出"
+    echo "====================================="
+}
+
+# 主程序
+main() {
+    check_root
+    check_net_tools
+    
+    while true; do
+        show_menu
+        read -p "请选择操作 [1-6]: " choice
+        
+        case $choice in
+            1)
+                check_firewall_type
+                ;;
+            2)
+                show_all_ports_status
+                ;;
+            3)
+                check_specific_ports
+                ;;
+            4)
+                open_ports
+                ;;
+            5)
+                close_ports
+                ;;
+            6)
+                echo "退出脚本"
+                exit 0
+                ;;
+            *)
+                echo "无效选择，请重新输入"
+                ;;
+        esac
+        
+        echo
+        read -p "按回车键继续..."
     done
 }
 
-# 菜单显示
-menu() {
-    echo -e "${BOLD}${BLUE}======================== 防火墙管理脚本 ========================${RESET}"
-    echo -e "${GREEN}1.${RESET} 查看系统防火墙类型"
-    echo -e "${GREEN}2.${RESET} 查看端口开放状态"
-    echo -e "${GREEN}3.${RESET} 查看指定端口占用情况"
-    echo -e "${GREEN}4.${RESET} 开放指定端口"
-    echo -e "${GREEN}5.${RESET} 关闭指定端口"
-    echo -e "${RED}6.${RESET} 退出"
-    echo -e "${BOLD}${BLUE}==============================================================${RESET}"
-}
-
-# 处理用户输入，确保没有空格
-get_valid_input() {
-    read -p "请输入选项 [1-6]: " choice
-    # 去掉空格和换行符
-    choice=$(echo "$choice" | tr -d '[:space:]')
-    echo "$choice"
-}
-
-# 选择菜单项
-while true; do
-    menu
-    choice=$(get_valid_input)
-
-    # 调试输出：确认是否读取到用户输入
-    echo "调试输出: 用户输入的选项是: '$choice'"  # 调试输出
-
-    case $choice in
-        1)
-            firewall_type
-            ;;
-        2)
-            port_status
-            ;;
-        3)
-            check_specific_ports
-            ;;
-        4)
-            open_ports
-            ;;
-        5)
-            close_ports
-            ;;
-        6)
-            echo -e "${CYAN}退出脚本${RESET}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}无效选项，请输入 1 到 6 的选项。${RESET}"
-            ;;
-    esac
-done
+# 运行主程序
+main
