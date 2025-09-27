@@ -119,17 +119,21 @@ menu() {
     echo -e "${BOLD}${BLUE}==============================================================${RESET}"
 }
 
-# 处理用户输入，确保不带空格和换行
+# 处理用户输入，确保没有空格
 get_valid_input() {
     read -p "请输入选项 [1-6]: " choice
-    choice=$(echo $choice | tr -d '[:space:]')  # 去掉所有空格和换行符
-    echo $choice
+    # 去掉空格和换行符
+    choice=$(echo "$choice" | tr -d '[:space:]')
+    echo "$choice"
 }
 
 # 选择菜单项
 while true; do
     menu
     choice=$(get_valid_input)
+
+    # 调试输出：确认是否读取到用户输入
+    echo "调试输出: 用户输入的选项是: '$choice'"  # 调试输出
 
     case $choice in
         1)
