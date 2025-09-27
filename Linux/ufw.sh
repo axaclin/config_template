@@ -70,30 +70,30 @@ check_open_ports() {
     ipv6_ports=$(echo "$listening_ports" | grep ':.*:' | sort -n)
 
     # 打印标题
-    printf "%-10s %-10s %-20s %-20s\n" "端口" "协议" "状态" "占用进程"
+    printf "%-15s %-10s %-10s %-30s\n" "端口" "协议" "状态" "占用进程"
     echo "-------------------------------------------------------------"
 
     # 检查 IPv4 端口
     echo "==> IPv4 端口："
     for port in $ipv4_ports; do
-        # 获取占用的进程信息
-        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+        # 获取占用的进程名称
+        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2)
         if [ -n "$process_info" ]; then
-            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv4" "占用" "$process_info"
+            printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "IPv4" "占用" "$process_info"
         else
-            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv4" "未占用" "-"
+            printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "IPv4" "未占用" "-"
         fi
     done
 
     # 检查 IPv6 端口
     echo "==> IPv6 端口："
     for port in $ipv6_ports; do
-        # 获取占用的进程信息
-        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+        # 获取占用的进程名称
+        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2)
         if [ -n "$process_info" ]; then
-            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv6" "占用" "$process_info"
+            printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "IPv6" "占用" "$process_info"
         else
-            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv6" "未占用" "-"
+            printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "IPv6" "未占用" "-"
         fi
     done
 
@@ -115,21 +115,21 @@ check_specific_ports() {
 
         echo "查询端口范围 $start_port 到 $end_port 的占用情况："
         for port in $(seq $start_port $end_port); do
-            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2)
             if [ -n "$process_info" ]; then
-                printf "%-10s %-10s %-20s\n" "$port/tcp" "占用" "$process_info"
+                printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "占用" "$process_info"
             else
-                printf "%-10s %-10s %-20s\n" "$port/tcp" "未占用" "-"
+                printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "未占用" "-"
             fi
         done
     else
         # 处理单个或多个端口
         for port in $ports_input; do
-            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2)
             if [ -n "$process_info" ]; then
-                printf "%-10s %-10s %-20s\n" "$port/tcp" "占用" "$process_info"
+                printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "占用" "$process_info"
             else
-                printf "%-10s %-10s %-20s\n" "$port/tcp" "未占用" "-"
+                printf "%-15s %-10s %-10s %-30s\n" "$port/tcp" "未占用" "-"
             fi
         done
     fi
