@@ -15,12 +15,32 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 函数：显示菜单
+# 初始化变量
+CURRENT_FIREWALL=""
+
+# 函数：清空输入缓冲区
+clear_input_buffer() {
+    while read -t 0.1 -n 10000 discard; do
+        : # 清空所有待处理的输入
+    done
+}
+
+# 函数：安全读取输入
+safe_read() {
+    clear_input_buffer
+    read "$@"
+}
+
+# 函数：显示菜单（减少清屏频率）
 show_menu() {
-    clear
+    # 只在第一次显示菜单或需要时清屏
+    if [ "${1:-}" = "clear" ]; then
+        clear
+    fi
+    
     echo -e "${BLUE}"
     echo "=========================================="
-    echo "          防火墙管理脚本 v2.0"
+    echo "          防火墙管理脚本 v2.1"
     echo "=========================================="
     echo -e "${NC}"
     echo "1. 系统防火墙类型检查"
@@ -40,7 +60,8 @@ check_and_install() {
     
     if ! command -v $cmd &> /dev/null; then
         echo -e "${YELLOW}未找到 $cmd，需要安装...${NC}"
-        read -p "是否安装 $pkg？(y/n): " choice
+        echo -n "是否安装 $pkg？(y/n): "
+        safe_read choice
         if [ "$choice" = "y" ] || [ "$choice" = "Y" ]; then
             if command -v apt-get &> /dev/null; then
                 apt-get update
@@ -58,6 +79,26 @@ check_and_install() {
         fi
     fi
     return 0
+}
+
+# 函数：检测当前活动的防火墙
+detect_active_firewall() {
+    if [ -n "$CURRENT_FIREWALL" ]; then
+        echo "$CURRENT_FIREWALL"
+        return
+    fi
+    
+    if systemctl is-active firewalld &> /dev/null; then
+        CURRENT_FIREWALL="firewalld"
+    elif ufw status 2>/dev/null | grep -q "Status: active"; then
+        CURRENT_FIREWALL="ufw"
+    elif iptables -L INPUT -n 2>/dev/null | grep -q -E "(ACCEPT|DROP|REJECT)"; then
+        CURRENT_FIREWALL="iptables"
+    else
+        CURRENT_FIREWALL="none"
+    fi
+    
+    echo "$CURRENT_FIREWALL"
 }
 
 # 函数：检测防火墙类型
@@ -115,53 +156,62 @@ check_firewall_type() {
     
     # 检测当前正在使用的防火墙
     echo -e "${YELLOW}当前活动的防火墙:${NC}"
-    if systemctl is-active firewalld &> /dev/null; then
-        echo -e "${GREEN}✓ Firewalld 正在运行${NC}"
-        echo -e "  开放端口: $(firewall-cmd --list-ports 2>/dev/null | wc -w) 个"
-    elif ufw status 2>/dev/null | grep -q "Status: active"; then
-        echo -e "${GREEN}✓ UFW 正在运行${NC}"
-        echo -e "  开放端口: $(ufw status | grep ALLOW | wc -l) 个"
-    elif iptables -L INPUT -n 2>/dev/null | grep -q -E "(ACCEPT|DROP|REJECT)"; then
-        echo -e "${GREEN}✓ iptables 正在使用${NC}"
-    else
-        echo -e "${YELLOW}未检测到活动的防火墙，端口可能全部开放${NC}"
-    fi
+    local active_fw=$(detect_active_firewall)
+    case $active_fw in
+        "firewalld")
+            echo -e "${GREEN}✓ Firewalld 正在运行${NC}"
+            echo -e "  开放端口: $(firewall-cmd --list-ports 2>/dev/null | wc -w) 个"
+            ;;
+        "ufw")
+            echo -e "${GREEN}✓ UFW 正在运行${NC}"
+            echo -e "  开放端口: $(ufw status | grep ALLOW | wc -l) 个"
+            ;;
+        "iptables")
+            echo -e "${GREEN}✓ iptables 正在使用${NC}"
+            ;;
+        "none")
+            echo -e "${YELLOW}未检测到活动的防火墙，端口可能全部开放${NC}"
+            ;;
+    esac
     
-    read -p "按回车键继续..."
+    echo -e "\n按回车键返回菜单..."
+    safe_read
 }
 
 # 函数：获取防火墙开放端口信息
 get_firewall_ports() {
     local ports=()
+    local active_fw=$(detect_active_firewall)
     
-    if systemctl is-active firewalld &> /dev/null; then
-        # Firewalld
-        while IFS= read -r line; do
-            if [[ -n "$line" ]]; then
-                ports+=("$line")
-            fi
-        done < <(firewall-cmd --list-ports 2>/dev/null)
-    elif ufw status 2>/dev/null | grep -q "Status: active"; then
-        # UFW
-        while IFS= read -r line; do
-            if [[ $line =~ [0-9]+/(tcp|udp) ]]; then
-                ports+=("$line")
-            fi
-        done < <(ufw status | grep ALLOW)
-    elif command -v iptables &> /dev/null && iptables -L INPUT -n 2>/dev/null | grep -q -E "dpt:[0-9]+"; then
-        # iptables
-        while IFS= read -r line; do
-            if [[ $line =~ dpt:([0-9]+) ]]; then
-                port="${BASH_REMATCH[1]}"
-                if [[ $line =~ "(tcp|udp)" ]]; then
-                    protocol="${BASH_REMATCH[1]}"
-                else
-                    protocol="tcp/udp"
+    case $active_fw in
+        "firewalld")
+            while IFS= read -r line; do
+                if [[ -n "$line" ]]; then
+                    ports+=("$line")
                 fi
-                ports+=("$port/$protocol")
-            fi
-        done < <(iptables -L INPUT -n 2>/dev/null | grep dpt:)
-    fi
+            done < <(firewall-cmd --list-ports 2>/dev/null)
+            ;;
+        "ufw")
+            while IFS= read -r line; do
+                if [[ $line =~ [0-9]+/(tcp|udp) ]]; then
+                    ports+=("$line")
+                fi
+            done < <(ufw status | grep ALLOW)
+            ;;
+        "iptables")
+            while IFS= read -r line; do
+                if [[ $line =~ dpt:([0-9]+) ]]; then
+                    port="${BASH_REMATCH[1]}"
+                    if [[ $line =~ "(tcp|udp)" ]]; then
+                        protocol="${BASH_REMATCH[1]}"
+                    else
+                        protocol="tcp/udp"
+                    fi
+                    ports+=("$port/$protocol")
+                fi
+            done < <(iptables -L INPUT -n 2>/dev/null | grep dpt:)
+            ;;
+    esac
     
     printf '%s\n' "${ports[@]}"
 }
@@ -223,7 +273,6 @@ print_table() {
 # 函数：检查端口是否被占用及进程信息
 get_port_process_info() {
     local port=$1
-    local protocol=${2:-tcp}
     
     # 使用netstat或ss检查端口占用
     local process_info=""
@@ -233,7 +282,7 @@ get_port_process_info() {
         process_info=$(ss -tulpn 2>/dev/null | grep ":${port} " | head -1 | awk '{print $NF}')
     fi
     
-    if [ -n "$process_info" ]; then
+    if [ -n "$process_info" ] && [ "$process_info" != "-" ]; then
         echo "$process_info"
     else
         echo "未占用"
@@ -242,21 +291,18 @@ get_port_process_info() {
 
 # 函数：检查端口占用情况
 check_port_status() {
-    check_and_install "ss" "iproute2" || check_and_install "netstat" "net-tools" || return 1
+    check_and_install "ss" "iproute2" || check_and_install "netstat" "net-tools" || {
+        echo -e "\n按回车键返回菜单..."
+        safe_read
+        return 1
+    }
     
     echo -e "${BLUE}正在检查端口开放情况...${NC}"
     
     # 检查是否有活动的防火墙
-    local active_firewall="none"
-    if systemctl is-active firewalld &> /dev/null; then
-        active_firewall="firewalld"
-    elif ufw status 2>/dev/null | grep -q "Status: active"; then
-        active_firewall="ufw"
-    elif iptables -L INPUT -n 2>/dev/null | grep -q -E "(ACCEPT|DROP|REJECT)"; then
-        active_firewall="iptables"
-    fi
+    local active_fw=$(detect_active_firewall)
     
-    if [ "$active_firewall" = "none" ]; then
+    if [ "$active_fw" = "none" ]; then
         echo -e "${YELLOW}当前系统未开启防火墙，端口全开放${NC}"
         echo -e "${BLUE}当前监听端口:${NC}"
         if command -v ss &> /dev/null; then
@@ -265,11 +311,12 @@ check_port_status() {
             netstat -tuln | head -20
         fi
         echo -e "${YELLOW}(仅显示前20个监听端口)${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
-    echo -e "${GREEN}检测到活动的防火墙: $active_firewall${NC}"
+    echo -e "${GREEN}检测到活动的防火墙: $active_fw${NC}"
     
     # 获取防火墙开放的端口
     declare -a firewall_ports
@@ -281,7 +328,8 @@ check_port_status() {
     
     if [ ${#firewall_ports[@]} -eq 0 ]; then
         echo -e "${YELLOW}防火墙未配置任何开放端口规则${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
@@ -291,7 +339,7 @@ check_port_status() {
     
     # 处理每个防火墙端口规则
     for port_rule in "${firewall_ports[@]}"; do
-        local port protocol ip_type="IPv4"
+        local port protocol
         
         # 解析端口规则 (格式: 端口/协议)
         if [[ $port_rule =~ ^([0-9]+)/(tcp|udp)$ ]]; then
@@ -350,7 +398,8 @@ check_port_status() {
         echo -e "${GREEN}总计: ${#all_data[@]} 个端口规则${NC}"
     fi
     
-    read -p "按回车键继续..."
+    echo -e "\n按回车键返回菜单..."
+    safe_read
 }
 
 # 函数：检查指定端口
@@ -362,15 +411,21 @@ check_specific_ports() {
     echo "端口范围: 8000-8080"
     echo ""
     
-    read -p "请输入端口号: " port_input
+    echo -n "请输入端口号: "
+    safe_read port_input
     
     if [ -z "$port_input" ]; then
         echo -e "${RED}输入不能为空${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
-    check_and_install "ss" "iproute2" || check_and_install "netstat" "net-tools" || return 1
+    check_and_install "ss" "iproute2" || check_and_install "netstat" "net-tools" || {
+        echo -e "\n按回车键返回菜单..."
+        safe_read
+        return 1
+    }
     
     declare -a port_data
     
@@ -392,7 +447,8 @@ check_specific_ports() {
         IFS=',' read -ra ports <<< "$port_input"
     else
         echo -e "${RED}输入格式错误${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
@@ -472,7 +528,8 @@ check_specific_ports() {
         echo ""
     done
     
-    read -p "按回车键继续..."
+    echo -e "\n按回车键返回菜单..."
+    safe_read
 }
 
 # 函数：开放端口
@@ -485,27 +542,47 @@ open_ports() {
     echo "端口范围: 8000-8080/tcp"
     echo ""
     
-    read -p "请输入端口号: " port_input
+    echo -n "请输入端口号: "
+    safe_read port_input
     
     if [ -z "$port_input" ]; then
         echo -e "${RED}输入不能为空${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
     # 检测当前使用的防火墙
+    local active_fw=$(detect_active_firewall)
     local firewall_cmd=""
-    if systemctl is-active firewalld &> /dev/null; then
-        firewall_cmd="firewall-cmd"
-        check_and_install "firewall-cmd" "firewalld" || return 1
-    elif ufw status 2>/dev/null | grep -q "Status: active"; then
-        firewall_cmd="ufw"
-        check_and_install "ufw" "ufw" || return 1
-    else
-        echo -e "${YELLOW}未检测到活动的防火墙，将尝试使用iptables${NC}"
-        firewall_cmd="iptables"
-        check_and_install "iptables" "iptables" || return 1
-    fi
+    
+    case $active_fw in
+        "firewalld")
+            firewall_cmd="firewall-cmd"
+            check_and_install "firewall-cmd" "firewalld" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+        "ufw")
+            firewall_cmd="ufw"
+            check_and_install "ufw" "ufw" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+        "iptables"|"none")
+            echo -e "${YELLOW}未检测到活动的防火墙，将尝试使用iptables${NC}"
+            firewall_cmd="iptables"
+            check_and_install "iptables" "iptables" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+    esac
     
     echo -e "${GREEN}使用防火墙: $firewall_cmd${NC}"
     
@@ -555,7 +632,8 @@ open_ports() {
         echo -e "${RED}端口开放失败${NC}"
     fi
     
-    read -p "按回车键继续..."
+    echo -e "\n按回车键返回菜单..."
+    safe_read
 }
 
 # 函数：关闭端口
@@ -568,27 +646,47 @@ close_ports() {
     echo "端口范围: 8000-8080/tcp"
     echo ""
     
-    read -p "请输入端口号: " port_input
+    echo -n "请输入端口号: "
+    safe_read port_input
     
     if [ -z "$port_input" ]; then
         echo -e "${RED}输入不能为空${NC}"
-        read -p "按回车键继续..."
+        echo -e "\n按回车键返回菜单..."
+        safe_read
         return
     fi
     
     # 检测当前使用的防火墙
+    local active_fw=$(detect_active_firewall)
     local firewall_cmd=""
-    if systemctl is-active firewalld &> /dev/null; then
-        firewall_cmd="firewall-cmd"
-        check_and_install "firewall-cmd" "firewalld" || return 1
-    elif ufw status 2>/dev/null | grep -q "Status: active"; then
-        firewall_cmd="ufw"
-        check_and_install "ufw" "ufw" || return 1
-    else
-        echo -e "${YELLOW}未检测到活动的防火墙，将尝试使用iptables${NC}"
-        firewall_cmd="iptables"
-        check_and_install "iptables" "iptables" || return 1
-    fi
+    
+    case $active_fw in
+        "firewalld")
+            firewall_cmd="firewall-cmd"
+            check_and_install "firewall-cmd" "firewalld" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+        "ufw")
+            firewall_cmd="ufw"
+            check_and_install "ufw" "ufw" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+        "iptables"|"none")
+            echo -e "${YELLOW}未检测到活动的防火墙，将尝试使用iptables${NC}"
+            firewall_cmd="iptables"
+            check_and_install "iptables" "iptables" || {
+                echo -e "\n按回车键返回菜单..."
+                safe_read
+                return 1
+            }
+            ;;
+    esac
     
     echo -e "${GREEN}使用防火墙: $firewall_cmd${NC}"
     
@@ -638,13 +736,14 @@ close_ports() {
         echo -e "${RED}端口关闭失败${NC}"
     fi
     
-    read -p "按回车键继续..."
+    echo -e "\n按回车键返回菜单..."
+    safe_read
 }
 
 # 主循环
 while true; do
-    show_menu
-    read choice
+    show_menu "clear"  # 只在需要时清屏
+    safe_read choice
     
     case $choice in
         1)
