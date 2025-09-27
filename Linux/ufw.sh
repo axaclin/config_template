@@ -468,7 +468,7 @@ check_specific_ports() {
             netstat -tulpn 2>/dev/null | grep ":${port} " | while read line; do
                 echo "  $line"
             done
-        done
+        fi
         echo ""
     done
     
