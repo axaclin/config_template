@@ -21,24 +21,28 @@ check_firewall_type() {
     # 检查是否启用 ufw
     if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
         echo "当前系统使用的防火墙类型：UFW"
+        read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
 
     # 检查是否启用 firewalld
     if systemctl is-active --quiet firewalld; then
         echo "当前系统使用的防火墙类型：firewalld"
+        read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
 
     # 检查是否启用 iptables
     if systemctl is-active --quiet iptables; then
         echo "当前系统使用的防火墙类型：iptables"
+        read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
 
     # 检查是否启用 nftables
     if systemctl is-active --quiet nftables; then
         echo "当前系统使用的防火墙类型：nftables"
+        read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
     
@@ -50,27 +54,49 @@ check_firewall_type() {
 # 查询所有开放端口及占用情况
 check_open_ports() {
     echo "==================== 查询所有开放端口及占用情况 ===================="
-    
+
     # 获取已开放的端口
     open_ports=$(sudo ufw status | grep ALLOW | awk '{print $1}')
-    
+
     if [ -z "$open_ports" ]; then
         echo "没有发现开放的端口。"
         read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
-    
-    # 获取监听的端口
+
+    # 获取监听的端口，并按端口排序
     listening_ports=$(ss -tuln | awk '{print $5}' | cut -d: -f2 | sort -n | uniq)
-    
-    echo "开放端口及其占用情况："
-    for port in $open_ports; do
-        if echo "$listening_ports" | grep -q "^$port$"; then
-            echo "端口 $port 被占用"
+    ipv4_ports=$(echo "$listening_ports" | grep -v ':.*:' | sort -n)
+    ipv6_ports=$(echo "$listening_ports" | grep ':.*:' | sort -n)
+
+    # 打印标题
+    printf "%-10s %-10s %-20s %-20s\n" "端口" "协议" "状态" "占用进程"
+    echo "-------------------------------------------------------------"
+
+    # 检查 IPv4 端口
+    echo "==> IPv4 端口："
+    for port in $ipv4_ports; do
+        # 获取占用的进程信息
+        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+        if [ -n "$process_info" ]; then
+            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv4" "占用" "$process_info"
         else
-            echo "端口 $port 没有被占用"
+            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv4" "未占用" "-"
         fi
     done
+
+    # 检查 IPv6 端口
+    echo "==> IPv6 端口："
+    for port in $ipv6_ports; do
+        # 获取占用的进程信息
+        process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+        if [ -n "$process_info" ]; then
+            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv6" "占用" "$process_info"
+        else
+            printf "%-10s %-10s %-20s %-20s\n" "$port/tcp" "IPv6" "未占用" "-"
+        fi
+    done
+
     read -p "按任意键返回菜单..." -n 1 -s
 }
 
@@ -80,31 +106,34 @@ check_specific_ports() {
     echo "请输入一个或多个端口，端口之间用空格隔开，或者输入端口范围（例如：1000-2000）"
     echo "例如：22 80 443 或 1000-2000"
     read -p "请输入端口： " ports_input
-    
+
     # 判断输入是否为端口范围
     if [[ "$ports_input" =~ ^[0-9]+-[0-9]+$ ]]; then
         # 处理端口范围
         start_port=$(echo $ports_input | cut -d- -f1)
         end_port=$(echo $ports_input | cut -d- -f2)
-        
+
         echo "查询端口范围 $start_port 到 $end_port 的占用情况："
         for port in $(seq $start_port $end_port); do
-            if ss -tuln | grep -q ":$port "; then
-                echo "端口 $port 被占用"
+            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+            if [ -n "$process_info" ]; then
+                printf "%-10s %-10s %-20s\n" "$port/tcp" "占用" "$process_info"
             else
-                echo "端口 $port 没有被占用"
+                printf "%-10s %-10s %-20s\n" "$port/tcp" "未占用" "-"
             fi
         done
     else
         # 处理单个或多个端口
         for port in $ports_input; do
-            if ss -tuln | grep -q ":$port "; then
-                echo "端口 $port 被占用"
+            process_info=$(ss -tulnp | grep ":$port" | awk '{print $7}' | cut -d',' -f2)
+            if [ -n "$process_info" ]; then
+                printf "%-10s %-10s %-20s\n" "$port/tcp" "占用" "$process_info"
             else
-                echo "端口 $port 没有被占用"
+                printf "%-10s %-10s %-20s\n" "$port/tcp" "未占用" "-"
             fi
         done
     fi
+
     read -p "按任意键返回菜单..." -n 1 -s
 }
 
