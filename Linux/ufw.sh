@@ -1,229 +1,140 @@
 #!/bin/bash
 
-# 显示菜单
-menu() {
-    clear
-    echo "==================== 防火墙端口检查菜单 ===================="
-    echo "1. 获取当前系统使用的防火墙类型"
-    echo "2. 查询所有开放端口及占用情况"
-    echo "3. 查询指定端口占用情况"
-    echo "4. 开放指定端口"
-    echo "5. 关闭指定端口"
-    echo "6. 退出"
-    echo "=============================================================="
-    read -p "请选择操作 (1-6): " choice
-}
+# 检查是否有管理员权限
+if [[ $EUID -ne 0 ]]; then
+    echo "请使用 root 用户运行此脚本"
+    exit 1
+fi
 
-# 获取当前系统使用的防火墙类型
-check_firewall_type() {
-    echo "==================== 获取当前系统使用的防火墙类型 ===================="
-    
-    # 检查是否启用 ufw
-    if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
-        echo "当前系统使用的防火墙类型：UFW"
-        read -p "按任意键返回菜单..." -n 1 -s
-        return
-    fi
-
-    # 检查是否启用 firewalld
-    if systemctl is-active --quiet firewalld; then
-        echo "当前系统使用的防火墙类型：firewalld"
-        read -p "按任意键返回菜单..." -n 1 -s
-        return
-    fi
-
-    # 检查是否启用 iptables
-    if systemctl is-active --quiet iptables; then
-        echo "当前系统使用的防火墙类型：iptables"
-        read -p "按任意键返回菜单..." -n 1 -s
-        return
-    fi
-
-    # 检查是否启用 nftables
-    if systemctl is-active --quiet nftables; then
-        echo "当前系统使用的防火墙类型：nftables"
-        read -p "按任意键返回菜单..." -n 1 -s
-        return
-    fi
-    
-    # 如果都未启用
-    echo "未检测到活动的防火墙类型"
-    read -p "按任意键返回菜单..." -n 1 -s
-}
-
-# 查询所有开放端口及占用情况
-check_open_ports() {
-    echo "==================== 查询所有开放端口及占用情况 ===================="
-
-    # 获取已开放的端口
-    ufw_status=$(sudo ufw status)
-
-    # 格式化显示的标题
-    printf "%-15s %-10s %-10s %-30s\n" "端口" "协议" "状态" "占用IP"
-    echo "-------------------------------------------------------------"
-
-    # 过滤出开放端口并格式化显示
-    echo "$ufw_status" | grep -E "^[0-9]" | while read line; do
-        # 提取端口、协议、状态
-        port_protocol=$(echo $line | awk '{print $1}')
-        action=$(echo $line | awk '{print $2}')
-        from=$(echo $line | awk '{print $3}')
-
-        # 只显示 TCP 和 UDP 协议端口
-        if [[ "$port_protocol" =~ / ]]; then
-            protocol=$(echo $port_protocol | cut -d'/' -f2)
-            port=$(echo $port_protocol | cut -d'/' -f1)
-        else
-            protocol="TCP"
-            port=$port_protocol
-        fi
-
-        # 检查是否占用该端口并获取占用的IP
-        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
-
-        # 如果端口是 TCP 或 UDP，输出结果
-        if [[ "$action" == "ALLOW" ]]; then
-            # 检查该端口是否有占用 IP，如果有显示占用状态
-            if [ -n "$ip_address" ]; then
-                printf "%-15s %-10s %-10s %-30s\n" "$port" "$protocol" "占用" "$ip_address"
+# 检查是否安装了必要的工具
+function check_dependencies() {
+    required_tools=("ufw" "iptables" "ss" "netstat" "awk" "column")
+    for tool in "${required_tools[@]}"; do
+        if ! command -v $tool &> /dev/null; then
+            echo "$tool 未安装，是否安装？(y/n)"
+            read install_choice
+            if [[ $install_choice == "y" ]]; then
+                apt-get install $tool -y
             else
-                printf "%-15s %-10s %-10s %-30s\n" "$port" "$protocol" "未占用" "-"
+                echo "缺少依赖项，退出脚本"
+                exit 1
             fi
         fi
     done
-
-    read -p "按任意键返回菜单..." -n 1 -s
 }
 
-# 查询指定端口的占用情况
-check_specific_ports() {
-    echo "==================== 查询指定端口占用情况 ===================="
-    echo "请输入一个或多个端口，端口之间用空格隔开，或者输入端口范围（例如：1000-2000）"
-    echo "例如：22 80 443 或 1000-2000"
-    read -p "请输入端口： " ports_input
-
-    # 判断输入是否为端口范围
-    if [[ "$ports_input" =~ ^[0-9]+-[0-9]+$ ]]; then
-        # 处理端口范围
-        start_port=$(echo $ports_input | cut -d- -f1)
-        end_port=$(echo $ports_input | cut -d- -f2)
-
-        echo "查询端口范围 $start_port 到 $end_port 的占用情况："
-        for port in $(seq $start_port $end_port); do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
-            protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
-            if [ -n "$ip_address" ]; then
-                printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
-            else
-                printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "未占用" "-"
-            fi
-        done
+# 获取当前防火墙类型
+function get_firewall_type() {
+    if command -v ufw &> /dev/null; then
+        echo "UFW"
+    elif command -v iptables &> /dev/null; then
+        echo "iptables"
     else
-        # 处理单个或多个端口
-        for port in $ports_input; do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
-            protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
-            if [ -n "$ip_address" ]; then
-                printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
-            else
-                printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "未占用" "-"
-            fi
-        done
+        echo "未安装常见防火墙工具"
+    fi
+}
+
+# 显示当前端口开放情况
+function show_port_status() {
+    firewall_type=$(get_firewall_type)
+
+    if [[ "$firewall_type" == "未安装常见防火墙工具" ]]; then
+        echo "当前系统未开启防火墙，端口全开放"
+        return
     fi
 
-    read -p "按任意键返回菜单..." -n 1 -s
+    if [[ "$firewall_type" == "UFW" ]]; then
+        sudo ufw status verbose | column -t
+    elif [[ "$firewall_type" == "iptables" ]]; then
+        sudo iptables -L -v -n --line-numbers | grep "ACCEPT" | column -t
+    fi
+}
+
+# 查看指定端口占用情况
+function show_specific_port_usage() {
+    echo "请输入端口或端口范围（例如: 80 或 1000-2000）："
+    read port_range
+    ss -tuln | grep -E "$port_range" | column -t
 }
 
 # 开放指定端口
-open_ports_function() {
-    echo "==================== 开放指定端口 ===================="
-    echo "请输入一个或多个端口，端口之间用空格隔开，或者输入端口范围（例如：1000-2000）"
-    echo "例如：22 80 443 或 1000-2000"
-    read -p "请输入端口： " ports_input
-
-    # 获取当前使用的防火墙类型
-    if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
-        # 使用 UFW 开放端口
-        echo "当前使用的防火墙是 UFW，正在开放端口..."
-        sudo ufw allow $ports_input
-    elif systemctl is-active --quiet firewalld; then
-        # 使用 firewalld 开放端口
-        echo "当前使用的防火墙是 firewalld，正在开放端口..."
-        sudo firewall-cmd --permanent --add-port=$ports_input
-        sudo firewall-cmd --reload
-    elif systemctl is-active --quiet iptables; then
-        # 使用 iptables 开放端口
-        echo "当前使用的防火墙是 iptables，正在开放端口..."
-        sudo iptables -A INPUT -p tcp --dport $ports_input -j ACCEPT
-    elif systemctl is-active --quiet nftables; then
-        # 使用 nftables 开放端口
-        echo "当前使用的防火墙是 nftables，正在开放端口..."
-        sudo nft add rule inet filter input tcp dport $ports_input accept
-    else
-        echo "未检测到活动的防火墙类型，无法开放端口"
+function open_port() {
+    echo "请输入要开放的端口或端口范围（例如: 80 或 1000-2000）："
+    read port_range
+    firewall_type=$(get_firewall_type)
+    
+    if [[ "$firewall_type" == "UFW" ]]; then
+        sudo ufw allow $port_range
+    elif [[ "$firewall_type" == "iptables" ]]; then
+        sudo iptables -A INPUT -p tcp --dport $port_range -j ACCEPT
     fi
-
-    read -p "按任意键返回菜单..." -n 1 -s
 }
 
 # 关闭指定端口
-close_ports_function() {
-    echo "==================== 关闭指定端口 ===================="
-    echo "请输入一个或多个端口，端口之间用空格隔开，或者输入端口范围（例如：1000-2000）"
-    echo "例如：22 80 443 或 1000-2000"
-    read -p "请输入端口： " ports_input
-
-    # 获取当前使用的防火墙类型
-    if command -v ufw &> /dev/null && sudo ufw status | grep -q "Status: active"; then
-        # 使用 UFW 关闭端口
-        echo "当前使用的防火墙是 UFW，正在关闭端口..."
-        sudo ufw deny $ports_input
-    elif systemctl is-active --quiet firewalld; then
-        # 使用 firewalld 关闭端口
-        echo "当前使用的防火墙是 firewalld，正在关闭端口..."
-        sudo firewall-cmd --permanent --remove-port=$ports_input
-        sudo firewall-cmd --reload
-    elif systemctl is-active --quiet iptables; then
-        # 使用 iptables 关闭端口
-        echo "当前使用的防火墙是 iptables，正在关闭端口..."
-        sudo iptables -D INPUT -p tcp --dport $ports_input -j ACCEPT
-    elif systemctl is-active --quiet nftables; then
-        # 使用 nftables 关闭端口
-        echo "当前使用的防火墙是 nftables，正在关闭端口..."
-        sudo nft delete rule inet filter input tcp dport $ports_input accept
-    else
-        echo "未检测到活动的防火墙类型，无法关闭端口"
+function close_port() {
+    echo "请输入要关闭的端口或端口范围（例如: 80 或 1000-2000）："
+    read port_range
+    firewall_type=$(get_firewall_type)
+    
+    if [[ "$firewall_type" == "UFW" ]]; then
+        sudo ufw deny $port_range
+    elif [[ "$firewall_type" == "iptables" ]]; then
+        sudo iptables -D INPUT -p tcp --dport $port_range -j ACCEPT
     fi
-
-    read -p "按任意键返回菜单..." -n 1 -s
 }
 
-# 主程序循环
-while true; do
-    menu
+# 菜单显示
+function show_menu() {
+    clear
+    echo "----------------------------"
+    echo " 防火墙管理脚本"
+    echo "----------------------------"
+    echo "1. 查看当前防火墙类型"
+    echo "2. 查看开放端口占用情况"
+    echo "3. 查看指定端口占用情况"
+    echo "4. 开放指定端口"
+    echo "5. 关闭指定端口"
+    echo "6. 退出"
+    echo "----------------------------"
+    echo -n "请输入选择 [1-6]: "
+    read choice
+
     case $choice in
         1)
-            check_firewall_type
+            firewall_type=$(get_firewall_type)
+            echo "当前防火墙类型是: $firewall_type"
+            read -p "按任意键返回菜单..."
             ;;
         2)
-            check_open_ports
+            show_port_status
+            read -p "按任意键返回菜单..."
             ;;
         3)
-            check_specific_ports
+            show_specific_port_usage
+            read -p "按任意键返回菜单..."
             ;;
         4)
-            open_ports_function
+            open_port
+            read -p "按任意键返回菜单..."
             ;;
         5)
-            close_ports_function
+            close_port
+            read -p "按任意键返回菜单..."
             ;;
         6)
-            echo "退出程序。"
+            echo "退出脚本"
             exit 0
             ;;
         *)
-            echo "无效选项，请重新选择。"
-            read -p "按任意键返回菜单..." -n 1 -s
+            echo "无效选项，请重新选择"
+            read -p "按任意键返回菜单..."
             ;;
     esac
+}
+
+# 主程序
+check_dependencies
+
+while true; do
+    show_menu
 done
