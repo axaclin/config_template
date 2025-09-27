@@ -56,6 +56,7 @@ check_open_ports() {
     
     if [ -z "$open_ports" ]; then
         echo "没有发现开放的端口。"
+        read -p "按任意键返回菜单..." -n 1 -s
         return
     fi
     
