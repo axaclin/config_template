@@ -433,7 +433,7 @@ show_menu() {
 
 # 清理屏幕
 clear_screen() {
-    printf "\033c"
+    clear
 }
 
 # 主程序
@@ -448,6 +448,11 @@ main() {
         show_menu
         echo
         read -p "请选择操作 [1-6]: " choice
+        
+        # 清空输入缓冲区，避免多输入问题
+        while read -t 0.1 -n 1000 discard; do
+            true
+        done
         
         case $choice in
             1)
@@ -476,14 +481,16 @@ main() {
                 ;;
             *)
                 echo "无效选择，请重新输入"
+                # 不清屏，直接继续循环
                 sleep 1
+                # 只清除菜单部分，不清除错误信息
                 clear_screen
                 continue
                 ;;
         esac
         
         echo
-        read -p "按回车键返回主菜单..."
+        read -p "按回车键返回主菜单..." -r
         clear_screen
     done
 }
