@@ -55,32 +55,55 @@ check_firewall_type() {
 check_open_ports() {
     echo "==================== 查询所有开放端口及占用情况 ===================="
 
-    # 使用 ufw status 获取开放的端口
-    ufw_status=$(sudo ufw status)
+    # 获取已开放的端口
+    open_ports=$(sudo ufw status | grep ALLOW | awk '{print $1}')
 
-    # 格式化显示的标题
-    printf "%-20s %-10s %-10s\n" "端口" "协议" "状态"
+    if [ -z "$open_ports" ]; then
+        echo "没有发现开放的端口。"
+        read -p "按任意键返回菜单..." -n 1 -s
+        return
+    fi
+
+    # 获取监听的端口，并按端口排序
+    listening_ports=$(ss -tuln | awk '{print $5}' | cut -d: -f2 | sort -n | uniq)
+    ipv4_ports=$(echo "$listening_ports" | grep -v ':.*:' | sort -n)
+    ipv6_ports=$(echo "$listening_ports" | grep ':.*:' | sort -n)
+
+    # 打印标题，居中对齐
+    printf "%-15s %-10s %-10s %-30s\n" "端口" "协议" "状态" "占用IP"
     echo "-------------------------------------------------------------"
 
-    # 过滤出开放端口并格式化显示
-    echo "$ufw_status" | grep -E "^[0-9]" | while read line; do
-        # 提取端口、协议、状态
-        port_protocol=$(echo $line | awk '{print $1}')
-        action=$(echo $line | awk '{print $2}')
-        from=$(echo $line | awk '{print $3}')
+    # 检查 IPv4 端口
+    echo "==> IPv4 端口："
+    for port in $ipv4_ports; do
+        # 获取协议类型（TCP 或 UDP）
+        protocol=$(ss -tuln | grep ":$port" | awk '{print $1}' | head -n 1)
+        
+        # 获取占用端口的 IP 地址
+        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
 
-        # 只显示 TCP 和 UDP 协议端口
-        if [[ "$port_protocol" =~ / ]]; then
-            protocol=$(echo $port_protocol | cut -d'/' -f2)
-            port=$(echo $port_protocol | cut -d'/' -f1)
+        # 如果端口被占用，显示占用的 IP，否则显示未占用
+        if [ -n "$ip_address" ]; then
+            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv4" "占用" "$ip_address"
         else
-            protocol="TCP"
-            port=$port_protocol
+            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv4" "未占用" "-"
         fi
+    done
 
-        # 如果端口是 UDP 或 TCP，输出结果
-        if [[ "$action" == "ALLOW" ]]; then
-            printf "%-20s %-10s %-10s\n" "$port" "$protocol" "允许"
+    # 检查 IPv6 端口
+    echo "==> IPv6 端口："
+    for port in $ipv6_ports; do
+        # 获取协议类型（TCP 或 UDP）
+        protocol=$(ss -tuln | grep ":$port" | awk '{print $1}' | head -n 1)
+        
+        # 获取占用端口的 IP 地址
+        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+
+        # 如果端口被占用，显示占用的 IP，否则显示未占用
+        if [ -n "$ip_address" ]; then
+            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv6" "占用" "$ip_address"
+        else
+            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv6" "未占用" "-"
         fi
     done
 
@@ -102,7 +125,7 @@ check_specific_ports() {
 
         echo "查询端口范围 $start_port 到 $end_port 的占用情况："
         for port in $(seq $start_port $end_port); do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
+            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
             protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
             if [ -n "$ip_address" ]; then
                 printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
@@ -113,7 +136,7 @@ check_specific_ports() {
     else
         # 处理单个或多个端口
         for port in $ports_input; do
-            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u | grep -v '^\[' | grep -v '^\*')
+            ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
             protocol=$(ss -tulnp | grep ":$port" | awk '{print $1}' | head -n 1)
             if [ -n "$ip_address" ]; then
                 printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "占用" "$ip_address"
