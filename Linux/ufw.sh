@@ -69,7 +69,7 @@ check_open_ports() {
     ipv4_ports=$(echo "$listening_ports" | grep -v ':.*:' | sort -n)
     ipv6_ports=$(echo "$listening_ports" | grep ':.*:' | sort -n)
 
-    # 打印标题
+    # 打印标题，居中对齐
     printf "%-15s %-10s %-10s %-30s\n" "端口" "协议" "状态" "占用进程"
     echo "-------------------------------------------------------------"
 
