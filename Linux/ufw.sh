@@ -56,54 +56,39 @@ check_open_ports() {
     echo "==================== 查询所有开放端口及占用情况 ===================="
 
     # 获取已开放的端口
-    open_ports=$(sudo ufw status | grep ALLOW | awk '{print $1}')
+    ufw_status=$(sudo ufw status)
 
-    if [ -z "$open_ports" ]; then
-        echo "没有发现开放的端口。"
-        read -p "按任意键返回菜单..." -n 1 -s
-        return
-    fi
-
-    # 获取监听的端口，并按端口排序
-    listening_ports=$(ss -tuln | awk '{print $5}' | cut -d: -f2 | sort -n | uniq)
-    ipv4_ports=$(echo "$listening_ports" | grep -v ':.*:' | sort -n)
-    ipv6_ports=$(echo "$listening_ports" | grep ':.*:' | sort -n)
-
-    # 打印标题，居中对齐
+    # 格式化显示的标题
     printf "%-15s %-10s %-10s %-30s\n" "端口" "协议" "状态" "占用IP"
     echo "-------------------------------------------------------------"
 
-    # 检查 IPv4 端口
-    echo "==> IPv4 端口："
-    for port in $ipv4_ports; do
-        # 获取协议类型（TCP 或 UDP）
-        protocol=$(ss -tuln | grep ":$port" | awk '{print $1}' | head -n 1)
-        
-        # 获取占用端口的 IP 地址
-        ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
+    # 过滤出开放端口并格式化显示
+    echo "$ufw_status" | grep -E "^[0-9]" | while read line; do
+        # 提取端口、协议、状态
+        port_protocol=$(echo $line | awk '{print $1}')
+        action=$(echo $line | awk '{print $2}')
+        from=$(echo $line | awk '{print $3}')
 
-        # 如果端口被占用，显示占用的 IP，否则显示未占用
-        if [ -n "$ip_address" ]; then
-            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv4" "占用" "$ip_address"
+        # 只显示 TCP 和 UDP 协议端口
+        if [[ "$port_protocol" =~ / ]]; then
+            protocol=$(echo $port_protocol | cut -d'/' -f2)
+            port=$(echo $port_protocol | cut -d'/' -f1)
         else
-            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv4" "未占用" "-"
+            protocol="TCP"
+            port=$port_protocol
         fi
-    done
 
-    # 检查 IPv6 端口
-    echo "==> IPv6 端口："
-    for port in $ipv6_ports; do
-        # 获取协议类型（TCP 或 UDP）
-        protocol=$(ss -tuln | grep ":$port" | awk '{print $1}' | head -n 1)
-        
-        # 获取占用端口的 IP 地址
+        # 检查是否占用该端口并获取占用的IP
         ip_address=$(ss -tulnp | grep ":$port" | awk '{print $6}' | cut -d':' -f1 | sort -u)
 
-        # 如果端口被占用，显示占用的 IP，否则显示未占用
-        if [ -n "$ip_address" ]; then
-            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv6" "占用" "$ip_address"
-        else
-            printf "%-15s %-10s %-10s %-30s\n" "$port/$protocol" "IPv6" "未占用" "-"
+        # 如果端口是 TCP 或 UDP，输出结果
+        if [[ "$action" == "ALLOW" ]]; then
+            # 检查该端口是否有占用 IP，如果有显示占用状态
+            if [ -n "$ip_address" ]; then
+                printf "%-15s %-10s %-10s %-30s\n" "$port" "$protocol" "占用" "$ip_address"
+            else
+                printf "%-15s %-10s %-10s %-30s\n" "$port" "$protocol" "未占用" "-"
+            fi
         fi
     done
 
