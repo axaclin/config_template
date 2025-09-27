@@ -119,10 +119,17 @@ menu() {
     echo -e "${BOLD}${BLUE}==============================================================${RESET}"
 }
 
+# 处理用户输入，确保不带空格和换行
+get_valid_input() {
+    read -p "请输入选项 [1-6]: " choice
+    choice=$(echo $choice | tr -d '[:space:]')  # 去掉所有空格和换行符
+    echo $choice
+}
+
 # 选择菜单项
 while true; do
     menu
-    read -p "请输入选项 [1-6]: " choice
+    choice=$(get_valid_input)
 
     case $choice in
         1)
@@ -145,7 +152,7 @@ while true; do
             exit 0
             ;;
         *)
-            echo -e "${RED}无效选项，请输入 1 到 6 的选项.${RESET}"
+            echo -e "${RED}无效选项，请输入 1 到 6 的选项。${RESET}"
             ;;
     esac
 done
