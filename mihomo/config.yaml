@@ -50,10 +50,10 @@ profile:
 
 # 控制面板
 external-controller: 0.0.0.0:9090
-secret: "91lhjdmmlM@.."
+secret: ""
 external-ui: "/etc/mihomo/run/ui"
-external-ui-name: zashboard
-external-ui-url: "https://gh-proxy.com/https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages.zip"
+external-ui-name: metacubexd
+external-ui-url: "https://gh-proxy.com/https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
 
 # 嗅探
 sniffer:
@@ -92,8 +92,8 @@ tun:
   gso-max-size: 65536
   endpoint-independent-nat: false
   route-exclude-address:
-    - 192.168.100.0/24
-    - 192.168.2.0/24
+    - 192.168.1.0/24
+    - 172.16.1.0/24
   exclude-interface:
     - tailscale0
 
